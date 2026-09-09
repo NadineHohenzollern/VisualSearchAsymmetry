@@ -1,6 +1,9 @@
 import numpy as np
 import tensorflow as tf
-from skimage.draw import circle
+from skimage.draw import disk as _disk
+
+def circle(r, c, radius):
+    return _disk((r, c), radius)
 
 class CentreDependentPooling2D(tf.keras.layers.Layer):
     """
@@ -49,9 +52,9 @@ class CentreDependentPooling2D(tf.keras.layers.Layer):
 
         self.base = max(self.rows, self.cols)
         if self.stride > 1:
-            self.out_shape = np.int((self.base+1)/(self.stride))
+            self.out_shape = int((self.base+1)/(self.stride))
         else:
-            self.out_shape = np.int(self.base)
+            self.out_shape = int(self.base)
 
         c = int(self.out_shape/2)
 
