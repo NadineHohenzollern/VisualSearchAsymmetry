@@ -1,7 +1,7 @@
 import numpy as np
 
 base_data_path = "dataset/"
-def get_data_paths(task, i):
+def get_data_paths(task, i, base_data_path=base_data_path):
     stim_path = base_data_path + task + '/stimuli/s_' + str(i+1) + '.jpg'
     gt_path = base_data_path + task + '/gt/gt_' + str(i+1) + '.jpg'
     tar_path = base_data_path + task + '/target/t_' + str(i+1) + '.jpg'

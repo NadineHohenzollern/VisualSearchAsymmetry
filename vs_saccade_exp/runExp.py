@@ -48,13 +48,29 @@ for out_layer in [[1, 1, 1]]:
 
     ecc_models.append(model_desc)
 
-for model_desc in ecc_models:
+_SACCADE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def run_saccade_experiment(model_desc, datasets=("Waldo", "NaturalDesign"),
+                            base_data_path=base_data_path, out_dir=None,
+                            corner_bias=16*4*1, pbar=None):
+    """Run the saccade-path search experiments for one model_desc, saving raw
+    fix/ifix/cp results under out_dir/<dataset>/ (same behavior as the original
+    top-level script, extracted here so it can be called with different eccParam
+    configurations, e.g. from a notebook).
+
+    out_dir defaults to the "out/" directory next to this script, resolved via
+    __file__ so the save location doesn't depend on the caller's cwd (e.g. a
+    notebook that has chdir'd elsewhere for its own imports)."""
+    if out_dir is None:
+        out_dir = os.path.join(_SACCADE_DIR, "out")
+
     vsm = VisualSearchModel(model_desc)
     print(vsm.model_name)
 
-    for task in ["ObjArr", "Waldo", "NaturalDesign"][1:]:
+    for task in datasets:
         exp_info = get_exp_info(task)
-        vsm.load_exp_info(exp_info, corner_bias=16*4*1)
+        vsm.load_exp_info(exp_info, corner_bias=corner_bias)
 
         NumStimuli = exp_info['NumStimuli']
         NumFix = exp_info['NumFix']
@@ -64,7 +80,7 @@ for model_desc in ecc_models:
         CP = np.zeros((NumStimuli, NumFix), dtype=int)
 
         for i in tqdm(range(NumStimuli), desc=task):
-            stim_path, gt_path, tar_path = get_data_paths(task, i)
+            stim_path, gt_path, tar_path = get_data_paths(task, i, base_data_path=base_data_path)
             saccade = vsm.start_search(stim_path, tar_path, gt_path)
 
             j = saccade.shape[0]
@@ -78,11 +94,28 @@ for model_desc in ecc_models:
             data[:, :, 0] = data[:, :, 0]*exp_info['s_ratio'][0]
             data[:, :, 1] = data[:, :, 1]*exp_info['s_ratio'][1]
 
-        np.save('out/' + task + '/cp/CP_' + vsm.model_name + '.npy', CP)
-        np.save('out/' + task + '/ifix/I_' + vsm.model_name + '.npy', I_data)
-        np.save('out/' + task + '/fix/' + vsm.model_name + '.npy', data)
+        task_out = os.path.join(out_dir, task)
+        os.makedirs(os.path.join(task_out, "cp"), exist_ok=True)
+        os.makedirs(os.path.join(task_out, "ifix"), exist_ok=True)
+        os.makedirs(os.path.join(task_out, "fix"), exist_ok=True)
 
-print("Total time taken:", time.time()-t_start)
+        np.save(os.path.join(task_out, "cp", "CP_" + vsm.model_name + ".npy"), CP)
+        np.save(os.path.join(task_out, "ifix", "I_" + vsm.model_name + ".npy"), I_data)
+        np.save(os.path.join(task_out, "fix", vsm.model_name + ".npy"), data)
+
+        if pbar is not None:
+            pbar.update(1)
+
+    return vsm.model_name
+
+
+if __name__ == "__main__":
+    pbar = tqdm(total=len(ecc_models)*2)
+    for model_desc in ecc_models:
+        run_saccade_experiment(model_desc, datasets=["Waldo", "NaturalDesign"], base_data_path=base_data_path, pbar=pbar)
+    pbar.close()
+
+    print("Total time taken:", time.time()-t_start)
 
 
 # In[ ]:

@@ -76,19 +76,27 @@ for out_layer in [[1, 1, 1]]:
 # In[ ]:
 
 
-exps = ['categorization', 'curvature', 'intersection', 'lightning_dir']
+_ECCNET_DIR = os.path.dirname(os.path.abspath(__file__))
 
-pbar = tqdm(total=len(ecc_models)*12)
-for model_desc in ecc_models:
+
+def run_eccnet_experiment(model_desc, exps=('categorization', 'curvature', 'intersection', 'lightning_dir'), base_data_path=base_data_path, out_dir=None, pbar=None):
+    """Run the eccNET search-asymmetry experiments for one model_desc, saving raw
+    out_data/fix results under out_dir/<model_name>/ (same behavior as the original
+    top-level script, extracted here so it can be called with different eccParam
+    configurations, e.g. from a notebook).
+
+    out_dir defaults to the "out/" directory next to this script, resolved via
+    __file__ so the save location doesn't depend on the caller's cwd (e.g. a
+    notebook that has chdir'd elsewhere for its own imports)."""
+    if out_dir is None:
+        out_dir = os.path.join(_ECCNET_DIR, "out")
+
     vsm = VisualSearchModel(model_desc)
     print(vsm.model_name)
 
-    save_path = "out/" + vsm.model_name
-    try:
-        os.makedirs(save_path + "/out_data/")
-        os.makedirs(save_path + "/fix/")
-    except:
-        pass
+    save_path = os.path.join(out_dir, vsm.model_name)
+    os.makedirs(save_path + "/out_data/", exist_ok=True)
+    os.makedirs(save_path + "/fix/", exist_ok=True)
 
     for exp_type in exps:
         exp_info = get_exp_info(exp_type, base_data_path=base_data_path)
@@ -118,11 +126,29 @@ for model_desc in ecc_models:
             file_name = save_path + '/fix/' + exp_type + '_' + exp_name[task_id] + '.npy'
             np.save(file_name, data)
 
-            pbar.update(1)
+            if pbar is not None:
+                pbar.update(1)
 
-pbar.close()
+    return vsm.model_name
 
-print("Total time taken:", time.time()-t_start)
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--exps", nargs="+",
+                         choices=["categorization", "curvature", "intersection", "lightning_dir"],
+                         default=["categorization", "curvature", "intersection", "lightning_dir"],
+                         help="Which exp_types to run (default: all).")
+    args = parser.parse_args()
+    exps = args.exps
+
+    total_tasks = sum(get_exp_info(exp_type, base_data_path=base_data_path)['num_task'] for exp_type in exps)
+    pbar = tqdm(total=len(ecc_models)*total_tasks)
+    for model_desc in ecc_models:
+        run_eccnet_experiment(model_desc, exps=exps, base_data_path=base_data_path, pbar=pbar)
+    pbar.close()
+
+    print("Total time taken:", time.time()-t_start)
 
 
 # In[ ]:
