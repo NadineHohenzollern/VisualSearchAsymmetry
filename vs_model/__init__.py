@@ -139,6 +139,7 @@ class VisualSearchModel:
 
         attn_maps = []
         vis_area_crop = []
+        layer_maps = []
 
         for k in range(self.NumFix):
             if self.gt_mask is None:
@@ -200,6 +201,7 @@ class VisualSearchModel:
 
             if debug_flag:
                 attn_maps.append(out)
+                layer_maps.append([cv2.resize(o, (self.model_ip_shape[0], self.model_ip_shape[1]), interpolation = cv2.INTER_AREA) for o in outf_l])
                 temp_vis_area = np.copy((stimuli)[0, saccade[-1][0]-self.eye_res-self.corner_bias:saccade[-1][0]+self.eye_res+self.corner_bias, saccade[-1][1]-self.eye_res-self.corner_bias:saccade[-1][1]+self.eye_res+self.corner_bias, :])
                 vis_area_crop.append(temp_vis_area)
 
@@ -218,7 +220,7 @@ class VisualSearchModel:
         saccade = np.array(saccade)
 
         if debug_flag:
-            return self.post_process_saccades(saccade), attn_maps, vis_area_crop
+            return self.post_process_saccades(saccade), attn_maps, vis_area_crop, layer_maps
         else:
             return self.post_process_saccades(saccade)
 
