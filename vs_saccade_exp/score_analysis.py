@@ -2,11 +2,11 @@ from __future__ import print_function
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-import ScanMatchPy
-import matlab
 from tqdm.notebook import tqdm
 import matplotlib as mpl
 import copy
+import multimatch_gaze
+import scanmatch
 
 NumStimuliDataset = {'ObjArr': 300, 'Waldo': 67, 'NaturalDesign': 240}
 colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52']
@@ -315,6 +315,9 @@ def ScanpathScore(dataset_name, model_names, focus):
     print()
 
 def __ss_scoreHvH(dataset_name):
+    import ScanMatchPy
+    import matlab
+
     fix_dir = "out/" + dataset_name + "/fix/"
     cp_dir = "out/" + dataset_name + "/cp/"
     ifix_dir = "out/" + dataset_name + "/ifix/"
@@ -351,6 +354,9 @@ def __ss_scoreHvH(dataset_name):
         np.save(ss_dir + 'human.npy', [f_score, f_std])
 
 def __ss_score(dataset_name, model_names):
+    import ScanMatchPy
+    import matlab
+
     fix_dir = "out/" + dataset_name + "/fix/"
     cp_dir = "out/" + dataset_name + "/cp/"
     ifix_dir = "out/" + dataset_name + "/ifix/"
@@ -389,3 +395,367 @@ def __ss_score(dataset_name, model_names):
         np.save(ss_dir + model_name, [f_score, f_std])
 
     metric.terminate()
+
+# ---------------------------------------------------------------------------
+# Pure-Python (no ScanMatchPy/MATLAB) ScanMatch (Cristino et al., 2010), using
+# scanmatch.py -- a NumPy reimplementation validated against a real MATLAB
+# installation running the original open ScanMatch.m toolbox (see
+# scanmatch.py's module docstring for details on what was and wasn't
+# verifiable). Results are written to a separate "ss_score_py/" directory so
+# they are never mixed with the MATLAB-computed "ss_score/" cache (different
+# parameter choice, not guaranteed on the same absolute scale -- see
+# scanmatch.py docstring).
+# ---------------------------------------------------------------------------
+
+SCANMATCH_XRES = {'Waldo': 1280, 'NaturalDesign': 1280, 'ObjArr': 544}
+SCANMATCH_YRES = {'Waldo': 1024, 'NaturalDesign': 1024, 'ObjArr': 544}
+SCANMATCH_XBIN = 12
+SCANMATCH_YBIN = 8
+
+def __ss_scoreHvH_py(dataset_name):
+    fix_dir = "out/" + dataset_name + "/fix/"
+    ifix_dir = "out/" + dataset_name + "/ifix/"
+    ss_dir = "out/" + dataset_name + "/ss_score_py/"
+    try:
+        os.makedirs(ss_dir)
+    except FileExistsError:
+        pass
+
+    calc_scores = os.listdir(ss_dir)
+
+    if 'human.npy' not in calc_scores:
+        data_human = np.load(fix_dir + "human_all.npy")
+        I_data_human = np.load(ifix_dir + "I_human_all.npy")
+        NumStimuli = NumStimuliDataset[dataset_name]
+        Xres, Yres = SCANMATCH_XRES[dataset_name], SCANMATCH_YRES[dataset_name]
+        threshold = scanmatch.estimate_threshold(data_human, I_data_human, Xres, SCANMATCH_XBIN)
+
+        scores = []
+        for i in tqdm(range(15), desc=dataset_name + " - human (ScanMatch py)"):
+            fix1 = data_human[i*NumStimuli:(i+1)*NumStimuli]
+            I_fix1 = I_data_human[i*NumStimuli:(i+1)*NumStimuli]
+
+            for sub_id in range(i + 1, 15):
+                fix2 = data_human[sub_id*NumStimuli:(sub_id+1)*NumStimuli]
+                I_fix2 = I_data_human[sub_id*NumStimuli:(sub_id+1)*NumStimuli]
+                score = scanmatch.mean_scan_match_score(fix1, I_fix1, fix2, I_fix2, Xres, Yres,
+                                                         Xbin=SCANMATCH_XBIN, Ybin=SCANMATCH_YBIN,
+                                                         threshold=threshold)
+                scores.append(score)
+
+        scores = np.asarray(scores)
+        f_score = np.mean(scores)
+        f_std = np.std(scores)/np.sqrt(scores.shape[0])
+        np.save(ss_dir + 'human.npy', [f_score, f_std])
+
+def __ss_score_py(dataset_name, model_names):
+    fix_dir = "out/" + dataset_name + "/fix/"
+    ifix_dir = "out/" + dataset_name + "/ifix/"
+    ss_dir = "out/" + dataset_name + "/ss_score_py/"
+    try:
+        os.makedirs(ss_dir)
+    except FileExistsError:
+        pass
+
+    calc_scores = os.listdir(ss_dir)
+
+    data_human = np.load(fix_dir + "human_all.npy")
+    I_data_human = np.load(ifix_dir + "I_human_all.npy")
+    NumStimuli = NumStimuliDataset[dataset_name]
+    Xres, Yres = SCANMATCH_XRES[dataset_name], SCANMATCH_YRES[dataset_name]
+    threshold = scanmatch.estimate_threshold(data_human, I_data_human, Xres, SCANMATCH_XBIN)
+
+    for i in range(len(model_names)):
+        model_name = model_names[i]
+        if (model_names[i][0] == '.') or (model_names[i][:5] == 'human') or (model_names[i] in calc_scores):
+            continue
+
+        fix_model = np.load(fix_dir + model_name)
+        I_fix_model = np.load(ifix_dir + 'I_' + model_name)
+
+        scores = []
+        for sub_id in tqdm(range(15), desc=dataset_name + " - " + model_name[:-4] + " (ScanMatch py)"):
+            fix_sub = data_human[sub_id*NumStimuli:(sub_id+1)*NumStimuli]
+            I_fix_sub = I_data_human[sub_id*NumStimuli:(sub_id+1)*NumStimuli]
+            score = scanmatch.mean_scan_match_score(fix_model, I_fix_model, fix_sub, I_fix_sub, Xres, Yres,
+                                                     Xbin=SCANMATCH_XBIN, Ybin=SCANMATCH_YBIN,
+                                                     threshold=threshold)
+            scores.append(score)
+
+        scores = np.asarray(scores)
+        f_score = np.mean(scores)
+        f_std = np.std(scores)/np.sqrt(scores.shape[0])
+
+        np.save(ss_dir + model_name, [f_score, f_std])
+
+def ScanpathScorePy(dataset_name, model_names, focus):
+    """Pure-Python ScanMatch equivalent of ScanpathScore (no ScanMatchPy/MATLAB
+    needed) -- see the module-level comment above for why results aren't mixed
+    with the MATLAB-computed ss_score/ cache."""
+    ss_dir = "out/" + dataset_name + "/ss_score_py/"
+    try:
+        os.makedirs(ss_dir)
+    except FileExistsError:
+        pass
+
+    __ss_scoreHvH_py(dataset_name)
+    __ss_score_py(dataset_name, model_names)
+
+    calc_scores = os.listdir(ss_dir)
+
+    if calc_scores[0] != 'human.npy':
+        tmp = calc_scores[0]
+        calc_scores.remove('human.npy')
+        calc_scores.append(copy.deepcopy(tmp))
+        calc_scores[0] = 'human.npy'
+
+    if calc_scores[1] != 'eccNET.npy':
+        tmp = calc_scores[1]
+        calc_scores.remove('eccNET.npy')
+        calc_scores.append(copy.deepcopy(tmp))
+        calc_scores[1] = 'eccNET.npy'
+
+    if calc_scores[2] != model_names[focus]:
+        tmp = calc_scores[2]
+        calc_scores.remove(model_names[focus])
+        calc_scores.append(copy.deepcopy(tmp))
+        calc_scores[2] = model_names[focus]
+
+    model_scores = []
+    rem_model = []
+
+    for model_name in calc_scores:
+        if (model_name[0] == '.'):
+            rem_model.append(model_name)
+        elif model_name in model_names or model_name[:5] == "human":
+            model_scores.append(np.load(ss_dir+model_name))
+        else:
+            rem_model.append(model_name)
+
+    for model_name in rem_model:
+        calc_scores.remove(model_name)
+
+    for n in range(len(calc_scores)):
+        calc_scores[n] = calc_scores[n][:-4]
+
+    model_scores = np.asarray(model_scores)
+
+    os.makedirs("results/" + dataset_name + "/ScanPathScore/", exist_ok = True)
+
+    plt.figure()
+    N = model_scores.shape[0]
+    idx = np.arange(0, 5*N, 5)
+    plt.bar(idx, model_scores[:, 0], 3.5, yerr=model_scores[:, 1], color=tuple([colors[1], colors[2], colors[0], '#919191'] + (len(model_scores[:, 0])-4)*['#BDBDBD']), edgecolor=blk_col)
+    plt.ylabel('Scanpath Similarity Scores (Python ScanMatch)', labelpad=15)
+    plt.xlabel('Models', labelpad=20)
+    plt.title(dataset_name)
+    plt.xticks(idx, calc_scores, rotation=90, position=(0.5, 0.42), va="center", ha="center", size='small', color=blk_col)
+    plt.yticks(np.arange(0, np.max(model_scores[:, 0]) + 0.1, 0.1))
+    plt.savefig("results/" + dataset_name + "/ScanPathScore/ScanPathScores_py.eps", dpi=150)
+
+    score_save = np.array(calc_scores).reshape(-1, 1)
+    score_save = np.concatenate((score_save.T, model_scores.T)).T
+    np.savetxt("results/" + dataset_name + "/ScanPathScore/ScanPathScores_py.csv", score_save, delimiter=",", fmt="%s")
+
+    print("Dataset:", dataset_name, "(Python ScanMatch)")
+    for i in range(len(calc_scores)):
+        spacing = ''
+        for j in range(50 - len(calc_scores[i])):
+            spacing += '_'
+
+        print(calc_scores[i] + spacing, round(100*model_scores[i][0], 2))
+    print()
+
+# ---------------------------------------------------------------------------
+# MultiMatch (Dewhurst et al., 2012) based scanpath similarity, via the
+# `multimatch_gaze` pip package -- an established, independently-maintained
+# scanpath comparison library (no ScanMatchPy/MATLAB dependency).
+#
+# MultiMatch compares two scanpaths on 5 dimensions: Vector (Shape),
+# Direction, Length, Position, and Duration. Our pipeline does not record
+# fixation durations (only positions + fixation counts), so a constant
+# placeholder duration is used for every fixation -- the Duration dimension
+# is therefore meaningless (always ~1.0) and is excluded from the reported/
+# plotted similarity; only the 4 spatial dimensions (Vector, Direction,
+# Length, Position) are used, averaged into a single score per comparison.
+#
+# Results are written to "ss_score_mm/", separate from the old MATLAB-based
+# "ss_score/" cache (different metric entirely, not comparable).
+# ---------------------------------------------------------------------------
+
+MULTIMATCH_SCREENSIZE = {'Waldo': [1280, 1024], 'NaturalDesign': [1280, 1024], 'ObjArr': [544, 544]}
+MULTIMATCH_PLACEHOLDER_DURATION = 1.0
+
+def __multimatch_score_one(fix_a, n_a, fix_b, n_b, screensize):
+    """fix_a/fix_b: (NumFix, 2) fixation arrays for ONE stimulus, columns (row=Y, col=X)
+    as stored by run_saccade_experiment/runExp.py. n_a/n_b: actual fixation counts.
+    Returns the mean of MultiMatch's 4 spatial dimensions (Vector, Direction, Length,
+    Position), or NaN if either scanpath has fewer than 3 fixations (MultiMatch's own
+    minimum)."""
+    n_a, n_b = int(n_a), int(n_b)
+    if n_a < 3 or n_b < 3:
+        return np.nan
+
+    def to_record_array(fix, n):
+        arr = np.asarray(fix)[:n]
+        rec = np.zeros(n, dtype=[('start_x', float), ('start_y', float), ('duration', float)])
+        rec['start_x'] = arr[:, 1]
+        rec['start_y'] = arr[:, 0]
+        rec['duration'] = MULTIMATCH_PLACEHOLDER_DURATION
+        return rec
+
+    result = multimatch_gaze.docomparison(to_record_array(fix_a, n_a), to_record_array(fix_b, n_b),
+                                           screensize=screensize)
+    # result = [Vector, Direction, Length, Position, Duration] -- drop Duration (meaningless here)
+    return np.nanmean(result[:4])
+
+def __mm_mean_score(fix_a, I_a, fix_b, I_b, screensize):
+    """Averages __multimatch_score_one(...) over all NumStimuli stimuli (NaN-safe) --
+    mirrors ScanMatchPy's findScore(...) semantics (one call = one subject/model-pair
+    comparison, averaged over stimuli)."""
+    fix_a, fix_b = np.asarray(fix_a), np.asarray(fix_b)
+    I_a, I_b = np.asarray(I_a).reshape(-1), np.asarray(I_b).reshape(-1)
+
+    scores = [__multimatch_score_one(fix_a[i], I_a[i], fix_b[i], I_b[i], screensize)
+              for i in range(fix_a.shape[0])]
+    return np.nanmean(scores)
+
+def __mm_scoreHvH(dataset_name):
+    fix_dir = "out/" + dataset_name + "/fix/"
+    ifix_dir = "out/" + dataset_name + "/ifix/"
+    ss_dir = "out/" + dataset_name + "/ss_score_mm/"
+    try:
+        os.makedirs(ss_dir)
+    except FileExistsError:
+        pass
+
+    calc_scores = os.listdir(ss_dir)
+
+    if 'human.npy' not in calc_scores:
+        data_human = np.load(fix_dir + "human_all.npy")
+        I_data_human = np.load(ifix_dir + "I_human_all.npy")
+        NumStimuli = NumStimuliDataset[dataset_name]
+        screensize = MULTIMATCH_SCREENSIZE[dataset_name]
+
+        scores = []
+        for i in tqdm(range(15), desc=dataset_name + " - human (MultiMatch)"):
+            fix1 = data_human[i*NumStimuli:(i+1)*NumStimuli]
+            I_fix1 = I_data_human[i*NumStimuli:(i+1)*NumStimuli]
+
+            for sub_id in range(i + 1, 15):
+                fix2 = data_human[sub_id*NumStimuli:(sub_id+1)*NumStimuli]
+                I_fix2 = I_data_human[sub_id*NumStimuli:(sub_id+1)*NumStimuli]
+                scores.append(__mm_mean_score(fix1, I_fix1, fix2, I_fix2, screensize))
+
+        scores = np.asarray(scores)
+        f_score = np.nanmean(scores)
+        f_std = np.nanstd(scores)/np.sqrt(np.sum(~np.isnan(scores)))
+        np.save(ss_dir + 'human.npy', [f_score, f_std])
+
+def __mm_score(dataset_name, model_names):
+    fix_dir = "out/" + dataset_name + "/fix/"
+    ifix_dir = "out/" + dataset_name + "/ifix/"
+    ss_dir = "out/" + dataset_name + "/ss_score_mm/"
+    try:
+        os.makedirs(ss_dir)
+    except FileExistsError:
+        pass
+
+    calc_scores = os.listdir(ss_dir)
+
+    data_human = np.load(fix_dir + "human_all.npy")
+    I_data_human = np.load(ifix_dir + "I_human_all.npy")
+    NumStimuli = NumStimuliDataset[dataset_name]
+    screensize = MULTIMATCH_SCREENSIZE[dataset_name]
+
+    for i in range(len(model_names)):
+        model_name = model_names[i]
+        if (model_names[i][0] == '.') or (model_names[i][:5] == 'human') or (model_names[i] in calc_scores):
+            continue
+
+        fix_model = np.load(fix_dir + model_name)
+        I_fix_model = np.load(ifix_dir + 'I_' + model_name)
+
+        scores = []
+        for sub_id in tqdm(range(15), desc=dataset_name + " - " + model_name[:-4] + " (MultiMatch)"):
+            fix_sub = data_human[sub_id*NumStimuli:(sub_id+1)*NumStimuli]
+            I_fix_sub = I_data_human[sub_id*NumStimuli:(sub_id+1)*NumStimuli]
+            scores.append(__mm_mean_score(fix_model, I_fix_model, fix_sub, I_fix_sub, screensize))
+
+        scores = np.asarray(scores)
+        f_score = np.nanmean(scores)
+        f_std = np.nanstd(scores)/np.sqrt(np.sum(~np.isnan(scores)))
+
+        np.save(ss_dir + model_name, [f_score, f_std])
+
+def MultiMatchScore(dataset_name, model_names, focus):
+    """MultiMatch-based scanpath similarity comparison (no ScanMatchPy/MATLAB needed).
+    See the module-level comment above for why the Duration dimension is excluded and
+    results aren't mixed with the old MATLAB-computed ss_score/ cache."""
+    ss_dir = "out/" + dataset_name + "/ss_score_mm/"
+    try:
+        os.makedirs(ss_dir)
+    except FileExistsError:
+        pass
+
+    __mm_scoreHvH(dataset_name)
+    __mm_score(dataset_name, model_names)
+
+    calc_scores = os.listdir(ss_dir)
+
+    if calc_scores[0] != 'human.npy':
+        tmp = calc_scores[0]
+        calc_scores.remove('human.npy')
+        calc_scores.append(copy.deepcopy(tmp))
+        calc_scores[0] = 'human.npy'
+
+    if calc_scores[1] != model_names[focus]:
+        tmp = calc_scores[1]
+        calc_scores.remove(model_names[focus])
+        calc_scores.append(copy.deepcopy(tmp))
+        calc_scores[1] = model_names[focus]
+
+    model_scores = []
+    rem_model = []
+
+    for model_name in calc_scores:
+        if (model_name[0] == '.'):
+            rem_model.append(model_name)
+        elif model_name in model_names or model_name[:5] == "human":
+            model_scores.append(np.load(ss_dir+model_name))
+        else:
+            rem_model.append(model_name)
+
+    for model_name in rem_model:
+        calc_scores.remove(model_name)
+
+    for n in range(len(calc_scores)):
+        calc_scores[n] = calc_scores[n][:-4]
+
+    model_scores = np.asarray(model_scores)
+
+    os.makedirs("results/" + dataset_name + "/ScanPathScore/", exist_ok = True)
+
+    plt.figure()
+    N = model_scores.shape[0]
+    idx = np.arange(0, 5*N, 5)
+    plt.bar(idx, model_scores[:, 0], 3.5, yerr=model_scores[:, 1], color=tuple([colors[1], colors[2], '#919191'] + (len(model_scores[:, 0])-3)*['#BDBDBD']), edgecolor=blk_col)
+    plt.ylabel('Scanpath Similarity Score (MultiMatch, 4 spatial dims)', labelpad=15)
+    plt.xlabel('Models', labelpad=20)
+    plt.title(dataset_name)
+    plt.xticks(idx, calc_scores, rotation=90, position=(0.5, 0.42), va="center", ha="center", size='small', color=blk_col)
+    plt.yticks(np.arange(0, np.max(model_scores[:, 0]) + 0.1, 0.1))
+    plt.savefig("results/" + dataset_name + "/ScanPathScore/ScanPathScores_multimatch.eps", dpi=150)
+
+    score_save = np.array(calc_scores).reshape(-1, 1)
+    score_save = np.concatenate((score_save.T, model_scores.T)).T
+    np.savetxt("results/" + dataset_name + "/ScanPathScore/ScanPathScores_multimatch.csv", score_save, delimiter=",", fmt="%s")
+
+    print("Dataset:", dataset_name, "(MultiMatch, 4 spatial dims)")
+    for i in range(len(calc_scores)):
+        spacing = ''
+        for j in range(50 - len(calc_scores[i])):
+            spacing += '_'
+
+        print(calc_scores[i] + spacing, round(100*model_scores[i][0], 2))
+    print()
