@@ -5,3 +5,6 @@ dataset
 vs_exp/results
 vs_exp/gbvs
 vs_saccade_exp/results
+.DS_Store
+*altParamSaccade*
+vs_exp/eccNET/out/eccNET_defaultParam/
