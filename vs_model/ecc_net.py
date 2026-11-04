@@ -146,6 +146,99 @@ class CentreDependentPooling2D(tf.keras.layers.Layer):
 
         return out
 
+
+class EccentricityPool2D(tf.keras.layers.Layer):
+
+    def __init__(
+        self,
+        ecc_slope=0.2,
+        fovea_size=2.0,
+        deg2px=30.0,
+        foveal_rf=1,
+        one_indexed=True,
+        **kwargs
+    ):
+        """
+        Eccentricity-dependent pooling layer.
+
+        Parameters
+        ----------
+        ecc_slope : float
+            Slope of the linear function mapping eccentricity to pooling radius.
+        fovea_size : float
+            Size of the fovea in degrees of visual angle.
+        deg2px : float
+            Conversion factor from degrees to pixels.
+        foveal_rf : int
+            Receptive field size at the fovea in pixels.
+        one_indexed : bool
+            If True, fixation coordinates are 1-indexed.
+        """
+
+        super().__init__(**kwargs)
+        self.ecc_slope = ecc_slope
+        self.fovea_size = fovea_size
+        self.deg2px = deg2px
+        self.foveal_rf = foveal_rf
+        self.one_indexed = one_indexed
+        self.offset = 1 if one_indexed else 0
+
+    def call(self, x, fixation=None):
+        """
+        x : (B, H, W, C) tensor.
+        fixation : optional (B, 2) tensor of (row, col) in pixels.
+        Returns a (B, H, W, C) tensor.
+        """
+        shape = tf.shape(x)
+        B, H, W, C = shape[0], shape[1], shape[2], shape[3]
+
+        # Summed-area table with a zero border, flattened to (B, (H+1)(W+1), C)
+        S = tf.cumsum(tf.cumsum(x, axis=1), axis=2)
+        S = tf.pad(S, [[0, 0], [1, 0], [1, 0], [0, 0]])
+        S = tf.reshape(S, [B, (H + 1) * (W + 1), C])
+
+        if fixation is None:
+            center = tf.stack([H // 2, W // 2])[tf.newaxis, :]
+            fixation = tf.tile(center, [B, 1])
+        fixation = tf.cast(fixation, tf.int32)
+
+        ys = tf.reshape(tf.range(H), [1, H, 1])
+        xs = tf.reshape(tf.range(W), [1, 1, W])
+        fy = tf.reshape(fixation[:, 0] - self.offset, [B, 1, 1])
+        fx = tf.reshape(fixation[:, 1] - self.offset, [B, 1, 1])
+
+        # Radius computation is kept in float32 regardless of input dtype
+        dy = tf.cast(ys - fy, tf.float32)
+        dx = tf.cast(xs - fx, tf.float32)
+        ecc = tf.sqrt(dy ** 2 + dx ** 2)
+        r = 0.5 * (self.foveal_rf
+                   + self.ecc_slope * (2.0 * ecc - self.fovea_size * self.deg2px))
+        r = tf.cast(tf.maximum(tf.floor(r), 0.0), tf.int32)  # (B, H, W)
+
+        y0 = tf.maximum(ys - r, 0)
+        y1 = tf.minimum(ys + r + 1, H)
+        x0 = tf.maximum(xs - r, 0)
+        x1 = tf.minimum(xs + r + 1, W)
+
+        def corner(yy, xx):
+            idx = tf.reshape(yy * (W + 1) + xx, [B, H * W])
+            return tf.gather(S, idx, batch_dims=1)  # (B, H*W, C)
+
+        total = corner(y1, x1) - corner(y0, x1) - corner(y1, x0) + corner(y0, x0)
+        area = tf.cast(tf.reshape((y1 - y0) * (x1 - x0), [B, H * W, 1]), x.dtype)
+
+        return tf.reshape(total / area, [B, H, W, C])
+
+    def get_config(self):
+        config = super().get_config()
+        config.update(dict(
+            ecc_slope=self.ecc_slope, fovea_size=self.fovea_size,
+            deg2px=self.deg2px, foveal_rf=self.foveal_rf,
+            one_indexed=self.one_indexed,
+        ))
+        return config
+
+
 def pool_layer(x, eccParam, layer, ecc_depth, depth, name=None):
     rf_min_l = eccParam['rf_min']
     stride_l = eccParam['stride']
@@ -161,7 +254,49 @@ def pool_layer(x, eccParam, layer, ecc_depth, depth, name=None):
         elif pool_type == 'avg':
             x = tf.keras.layers.AveragePooling2D((rf_min_l[depth-1], rf_min_l[depth-1]), strides=(stride_l[depth-1], stride_l[depth-1]), padding='same', name=name)(x)
     else:
-        x = CentreDependentPooling2D(rf_min=rf_min_l[depth-1], ecc_slope=ecc_slope[depth-1], deg2px=deg2px_l[depth-1], fovea_size=fovea_size, rf_quant=rf_quant, pool_type=pool_type, layer=layer, name=name, stride=stride_l[depth-1])(x)
+        if 'ecc_pool_type' in eccParam:
+            ecc_pool_type = eccParam['ecc_pool_type']
+        else:
+            ecc_pool_type = 'eccNET'
+        if ecc_pool_type == 'eccNET':
+            x = CentreDependentPooling2D(
+                rf_min=rf_min_l[depth-1],
+                ecc_slope=ecc_slope[depth-1],
+                deg2px=deg2px_l[depth-1],
+                fovea_size=fovea_size,
+                rf_quant=rf_quant,
+                pool_type=pool_type,
+                layer=layer,
+                name=name,
+                stride=stride_l[depth-1]
+            )(x)
+        elif ecc_pool_type == 'ecc_avg':
+            if stride_l[depth-1] > 1 :
+                if pool_type == 'max':
+                    x = tf.keras.layers.MaxPooling2D(
+                        (rf_min_l[depth-1], rf_min_l[depth-1]),
+                        strides=(stride_l[depth-1], stride_l[depth-1]),
+                        padding='same',
+                        name=name + '_max' if name is not None else None,
+                    )(x)
+                elif pool_type == 'avg':
+                    x = tf.keras.layers.AveragePooling2D(
+                        (rf_min_l[depth-1], rf_min_l[depth-1]),
+                        strides=(stride_l[depth-1], stride_l[depth-1]),
+                        padding='same',
+                        name=name + '_avg' if name is not None else None,
+                    )(x)
+                else:
+                    raise ValueError(f"Unknown pool_type: {pool_type}")
+            x = EccentricityPool2D(
+                ecc_slope=ecc_slope[depth-1],
+                deg2px=deg2px_l[depth-1],
+                fovea_size=fovea_size,
+                foveal_rf=1,
+                name=name + '_ecc' if name is not None else None,
+            )(x)
+        else:
+            raise ValueError(f"Unknown ecc_pool_type: {ecc_pool_type}")
 
     return x
 

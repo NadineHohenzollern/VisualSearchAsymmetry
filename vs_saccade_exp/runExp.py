@@ -17,6 +17,9 @@ from tensorflow.keras.utils import plot_model
 import tensorflow as tf
 import time
 
+# Uncomment to disable GPU usage (to avoid OOM)
+# tf.config.set_visible_devices([], "GPU")
+
 t_start = time.time()
 
 physical_devices = tf.config.list_physical_devices('GPU')
@@ -27,6 +30,7 @@ vgg_model_path = "../pretrained_model/vgg16_imagenet_filters.h5"
 base_data_path = "dataset/"
 
 eccParam = {}
+eccParam["ecc_pool_type"] = "ecc_avg"   # or eccNET
 eccParam['rf_min'] = [2]*5
 eccParam['stride'] = [2]*5
 eccParam['ecc_slope'] = [0, 0, 3.5*0.02, 8*0.02, 16*0.02]
@@ -110,9 +114,9 @@ def run_saccade_experiment(model_desc, datasets=("Waldo", "NaturalDesign"),
 
 
 if __name__ == "__main__":
-    pbar = tqdm(total=len(ecc_models)*2)
+    pbar = tqdm(total=len(ecc_models)*3)
     for model_desc in ecc_models:
-        run_saccade_experiment(model_desc, datasets=["Waldo", "NaturalDesign"], base_data_path=base_data_path, pbar=pbar)
+        run_saccade_experiment(model_desc, datasets=["ObjArr", "NaturalDesign", "Waldo"], base_data_path=base_data_path, pbar=pbar)
     pbar.close()
 
     print("Total time taken:", time.time()-t_start)

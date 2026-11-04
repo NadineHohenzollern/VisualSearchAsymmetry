@@ -8,3 +8,5 @@ vs_saccade_exp/results
 .DS_Store
 *altParamSaccade*
 vs_exp/eccNET/out/eccNET_defaultParam/
+testing.ipynb
+*out*
